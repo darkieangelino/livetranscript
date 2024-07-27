@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Softphone</title>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        #controls { margin: 20px; }
+        button { margin: 5px; padding: 10px; }
+        #remoteAudio { display: none; }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <button id="call">Call</button>
+        <button id="hangup" disabled>Hangup</button>
+    </div>
+    <audio id="remoteAudio" autoplay></audio>
+    <script>
+        const callButton = document.getElementById('call');
+        const hangupButton = document.getElementById('hangup');
+        const remoteAudio = document.getElementById('remoteAudio');
+        let localStream;
+        let peerConnection;
+        const signalingServerUrl = 'ws://88c8-203-194-98-248.ngrok-free.app/';
+        const signalingServer = new WebSocket(signalingServerUrl);
+
+        const servers = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' }
+            ]
+        };
+
+        callButton.onclick = async () => {
+            await startCall();
+        };
+
+        hangupButton.onclick = () => {
+            endCall();
+        };
+
+        async function startCall() {
+            callButton.disabled = true;
+            hangupButton.disabled = false;
+
+            localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+            peerConnection = new RTCPeerConnection(servers);
+            peerConnection.addStream(localStream);
+
+            peerConnection.onaddstream = (event) => {
+                remoteAudio.srcObject = event.stream;
+                remoteAudio.style.display = 'block';
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    signalingServer.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
+                }
+            };
+
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+
+            signalingServer.send(JSON.stringify({ type: 'offer', offer: offer }));
+        }
+
+        function endCall() {
+            callButton.disabled = false;
+            hangupButton.disabled = true;
+
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+
+            remoteAudio.style.display = 'none';
+        }
+
+        signalingServer.onmessage = async (message) => {
+            const data = JSON.parse(message.data);
+
+            if (data.type === 'offer') {
+                await handleOffer(data.offer);
+            } else if (data.type === 'answer') {
+                await handleAnswer(data.answer);
+            } else if (data.type === 'candidate') {
+                await handleCandidate(data.candidate);
+            }
+        };
+
+        async function handleOffer(offer) {
+            peerConnection = new RTCPeerConnection(servers);
+            peerConnection.addStream(localStream);
+
+            peerConnection.onaddstream = (event) => {
+                remoteAudio.srcObject = event.stream;
+                remoteAudio.style.display = 'block';
+            };
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    signalingServer.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
+                }
+            };
+
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+
+            signalingServer.send(JSON.stringify({ type: 'answer', answer: answer }));
+        }
+
+        async function handleAnswer(answer) {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        }
+
+        async function handleCandidate(candidate) {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+    </script>
+</body>
+</html>
